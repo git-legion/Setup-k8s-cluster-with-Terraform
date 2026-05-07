@@ -2,126 +2,48 @@
 set -e
 
 echo "================================="
-echo "🚀 Starting RKE Provisioning"
+echo "🔧 Preparing Node: $(hostname)"
 echo "================================="
 
-############################################
-# Fix DNS (important for AWS networking)
-############################################
-echo "🔧 Fixing DNS..."
-
+# 1. Fix DNS and APT (Essential for AWS default VPC networking)
+echo "🔹 Configuring DNS and cleaning APT..."
 sudo bash -c 'echo "nameserver 8.8.8.8" > /etc/resolv.conf'
-
-############################################
-# Fix APT corruption issues
-############################################
-echo "🔧 Fixing APT issues..."
-
 sudo rm -rf /var/lib/apt/lists/*
-sudo rm -rf /var/cache/apt/archives/*
-sudo mkdir -p /var/lib/apt/lists/partial
-
-sudo apt clean
 sudo apt update -y --fix-missing
 
-############################################
-# Install dependencies
-############################################
+# 2. Install dependencies
 echo "🔹 Installing dependencies..."
-
 sudo apt install -y ca-certificates curl gnupg lsb-release apt-transport-https
 
-############################################
-# Install Docker (NON-INTERACTIVE)
-############################################
-echo "🐳 Installing Docker..."
-
+# 3. Add Docker GPG key and Repository
+echo "🔹 Adding Docker repository..."
 sudo mkdir -p /etc/apt/keyrings
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
 
-curl -fsSL https://download.docker.com/linux/ubuntu/gpg | \
-sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
-
-echo \
-"deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] \
-https://download.docker.com/linux/ubuntu \
-$(lsb_release -cs) stable" | \
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | \
 sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
 
 sudo apt update -y
 
-sudo apt install -y \
-docker-ce=5:23.0.6-1~ubuntu.22.04~jammy \
-docker-ce-cli=5:23.0.6-1~ubuntu.22.04~jammy \
-containerd.io
+# 4. PIN DOCKER VERSION
+# RKE 1.4.8 fails with Docker 24+. We pin to 20.10.x for stability.
+echo "🐳 Installing supported Docker version (20.10.24)..."
+DOCKER_VER="5:20.10.24~3-0~ubuntu-jammy"
+sudo apt install -y docker-ce=$DOCKER_VER docker-ce-cli=$DOCKER_VER containerd.io
 
-############################################
-# Configure Docker
-############################################
-echo "⚙️ Configuring Docker..."
-
+# 5. Configure Docker for Kubernetes
+echo "⚙️ Configuring Docker daemon..."
 sudo mkdir -p /etc/docker
-
 echo '{
   "exec-opts": ["native.cgroupdriver=systemd"]
 }' | sudo tee /etc/docker/daemon.json
 
-sudo systemctl daemon-reexec
+# 6. Restart and Enable Docker
 sudo systemctl daemon-reload
-
 sudo systemctl enable docker
 sudo systemctl restart docker
 
+# 7. Grant permissions to ubuntu user
 sudo usermod -aG docker ubuntu
 
-############################################
-# Verify Docker
-############################################
-echo "✅ Verifying Docker..."
-
-docker --version
-
-############################################
-# Install RKE
-############################################
-echo "☸️ Installing RKE..."
-
-wget -q https://github.com/rancher/rke/releases/download/v1.4.8/rke_linux-amd64
-
-chmod +x rke_linux-amd64
-sudo mv rke_linux-amd64 /usr/local/bin/rke
-
-############################################
-# Verify RKE
-############################################
-echo "✅ Verifying RKE..."
-
-rke --version
-
-############################################
-# Run RKE cluster
-############################################
-echo "🚀 Running RKE cluster..."
-
-cd /home/ubuntu
-
-rke up
-
-############################################
-# Setup kubectl
-############################################
-echo "⚙️ Configuring kubectl..."
-
-export KUBECONFIG=/home/ubuntu/kube_config_cluster.yml
-
-echo 'export KUBECONFIG=/home/ubuntu/kube_config_cluster.yml' >> ~/.bashrc
-
-############################################
-# Verify cluster
-############################################
-echo "🎯 Cluster status..."
-
-kubectl get nodes || true
-
-echo "================================="
-echo "✅ RKE Cluster Setup Complete!"
-echo "================================="
+echo "✅ Node Preparation Complete!"
