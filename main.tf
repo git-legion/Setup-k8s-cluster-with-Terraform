@@ -1,4 +1,17 @@
 #############################################
+# Internal SSH Key Generation
+#############################################
+resource "tls_private_key" "rsa_key" {
+  algorithm = "RSA"
+  rsa_bits  = 4096
+}
+
+resource "aws_key_pair" "k8s_auth" {
+  key_name   = "internal-k8s-key"
+  public_key = tls_private_key.rsa_key.public_key_openssh
+}
+
+#############################################
 # Data Sources
 #############################################
 data "aws_vpc" "default" {
@@ -27,7 +40,6 @@ data "aws_ami" "ubuntu" {
 resource "aws_security_group" "rke_sg" {
   name = "rke-cluster-sg"
 
-  # REQUIRED: Allow all traffic between cluster nodes
   ingress {
     from_port = 0
     to_port   = 0
@@ -63,124 +75,106 @@ resource "aws_security_group" "rke_sg" {
 resource "aws_instance" "master" {
   ami                         = data.aws_ami.ubuntu.id
   instance_type               = var.instance_type
-  key_name                    = var.key_name
+  key_name                    = aws_key_pair.k8s_auth.key_name
   subnet_id                   = data.aws_subnets.default.ids[0]
   associate_public_ip_address = true
   vpc_security_group_ids      = [aws_security_group.rke_sg.id]
 
-  root_block_device {
-    volume_size = 20
-  }
-
-  user_data = <<-EOF
-#!/bin/bash
-hostnamectl set-hostname master
-EOF
+  user_data = "#!/bin/bash\nhostnamectl set-hostname master"
 
   tags = { Name = "master" }
 
-  # Prep Master with Docker
   provisioner "file" {
     source      = "provision.sh"
     destination = "/home/ubuntu/provision.sh"
     connection {
       type        = "ssh"
       user        = "ubuntu"
-      private_key = file("k8s_key.pem")
+      private_key = tls_private_key.rsa_key.private_key_pem
       host        = self.public_ip
     }
   }
 
   provisioner "remote-exec" {
-    inline = [
-      "chmod +x /home/ubuntu/provision.sh",
-      "/home/ubuntu/provision.sh"
-    ]
+    inline = ["chmod +x /home/ubuntu/provision.sh", "/home/ubuntu/provision.sh"]
     connection {
       type        = "ssh"
       user        = "ubuntu"
-      private_key = file("k8s_key.pem")
+      private_key = tls_private_key.rsa_key.private_key_pem
       host        = self.public_ip
     }
   }
 }
 
 #############################################
-# WORKERS
+# WORKER 1
 #############################################
 resource "aws_instance" "worker1" {
   ami                         = data.aws_ami.ubuntu.id
   instance_type               = var.instance_type
-  key_name                    = var.key_name
+  key_name                    = aws_key_pair.k8s_auth.key_name
   subnet_id                   = data.aws_subnets.default.ids[0]
   associate_public_ip_address = true
   vpc_security_group_ids      = [aws_security_group.rke_sg.id]
 
-  root_block_device { volume_size = 20 }
   user_data = "#!/bin/bash\nhostnamectl set-hostname worker-1"
 
   tags = { Name = "worker-1" }
 
-  # Prep Worker with Docker
   provisioner "file" {
     source      = "provision.sh"
     destination = "/home/ubuntu/provision.sh"
     connection {
       type        = "ssh"
       user        = "ubuntu"
-      private_key = file("k8s_key.pem")
+      private_key = tls_private_key.rsa_key.private_key_pem
       host        = self.public_ip
     }
   }
 
   provisioner "remote-exec" {
-    inline = [
-      "chmod +x /home/ubuntu/provision.sh",
-      "/home/ubuntu/provision.sh"
-    ]
+    inline = ["chmod +x /home/ubuntu/provision.sh", "/home/ubuntu/provision.sh"]
     connection {
       type        = "ssh"
       user        = "ubuntu"
-      private_key = file("k8s_key.pem")
+      private_key = tls_private_key.rsa_key.private_key_pem
       host        = self.public_ip
     }
   }
 }
 
+#############################################
+# WORKER 2
+#############################################
 resource "aws_instance" "worker2" {
   ami                         = data.aws_ami.ubuntu.id
   instance_type               = var.instance_type
-  key_name                    = var.key_name
+  key_name                    = aws_key_pair.k8s_auth.key_name
   subnet_id                   = data.aws_subnets.default.ids[0]
   associate_public_ip_address = true
   vpc_security_group_ids      = [aws_security_group.rke_sg.id]
 
-  root_block_device { volume_size = 20 }
   user_data = "#!/bin/bash\nhostnamectl set-hostname worker-2"
 
   tags = { Name = "worker-2" }
 
-  # Prep Worker with Docker
   provisioner "file" {
     source      = "provision.sh"
     destination = "/home/ubuntu/provision.sh"
     connection {
       type        = "ssh"
       user        = "ubuntu"
-      private_key = file("k8s_key.pem")
+      private_key = tls_private_key.rsa_key.private_key_pem
       host        = self.public_ip
     }
   }
 
   provisioner "remote-exec" {
-    inline = [
-      "chmod +x /home/ubuntu/provision.sh",
-      "/home/ubuntu/provision.sh"
-    ]
+    inline = ["chmod +x /home/ubuntu/provision.sh", "/home/ubuntu/provision.sh"]
     connection {
       type        = "ssh"
       user        = "ubuntu"
-      private_key = file("k8s_key.pem")
+      private_key = tls_private_key.rsa_key.private_key_pem
       host        = self.public_ip
     }
   }
@@ -199,17 +193,18 @@ resource "null_resource" "rke_setup" {
   connection {
     type        = "ssh"
     user        = "ubuntu"
-    private_key = file("k8s_key.pem")
+    private_key = tls_private_key.rsa_key.private_key_pem
     host        = aws_instance.master.public_ip
   }
 
-  # Upload SSH key for inter-node communication
-  provisioner "file" {
-    source      = "k8s_key.pem"
-    destination = "/home/ubuntu/k8s_key.pem"
+  # Inject the internally generated private key into the Master
+  provisioner "remote-exec" {
+    inline = [
+      "echo '${tls_private_key.rsa_key.private_key_pem}' > /home/ubuntu/id_rsa",
+      "chmod 400 /home/ubuntu/id_rsa"
+    ]
   }
 
-  # Generate RKE configuration from template
   provisioner "file" {
     content = templatefile("${path.module}/cluster.yml.tpl", {
       master_ip  = aws_instance.master.private_ip
@@ -219,10 +214,8 @@ resource "null_resource" "rke_setup" {
     destination = "/home/ubuntu/cluster.yml"
   }
 
-  # Install RKE, Kubectl, and deploy cluster
   provisioner "remote-exec" {
     inline = [
-      "chmod 400 /home/ubuntu/k8s_key.pem",
       # Install RKE Binary
       "wget -q https://github.com/rancher/rke/releases/download/v1.4.8/rke_linux-amd64",
       "chmod +x rke_linux-amd64 && sudo mv rke_linux-amd64 /usr/local/bin/rke",
@@ -231,7 +224,7 @@ resource "null_resource" "rke_setup" {
       "chmod +x kubectl && sudo mv kubectl /usr/local/bin/kubectl",
       # Deploy Cluster
       "rke up",
-      # Configuration and Alias
+      # Config setup
       "echo 'export KUBECONFIG=/home/ubuntu/kube_config_cluster.yml' >> ~/.bashrc",
       "echo \"alias k='kubectl'\" >> ~/.bashrc"
     ]
