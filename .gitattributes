@@ -1,0 +1,4 @@
+nux line endings for scripts and templates
+*.sh text eol=lf
+*.tpl text eol=lf
+*.tf text eol=lf

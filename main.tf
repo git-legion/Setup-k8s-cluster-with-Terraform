@@ -96,7 +96,11 @@ resource "aws_instance" "master" {
   }
 
   provisioner "remote-exec" {
-    inline = ["chmod +x /home/ubuntu/provision.sh", "/home/ubuntu/provision.sh"]
+    inline = [
+      "chmod +x /home/ubuntu/provision.sh",
+      "sed -i 's/\\r$//' /home/ubuntu/provision.sh",
+      "sudo bash /home/ubuntu/provision.sh"
+    ]
     connection {
       type        = "ssh"
       user        = "ubuntu"
@@ -133,7 +137,11 @@ resource "aws_instance" "worker1" {
   }
 
   provisioner "remote-exec" {
-    inline = ["chmod +x /home/ubuntu/provision.sh", "/home/ubuntu/provision.sh"]
+    inline = [
+      "chmod +x /home/ubuntu/provision.sh",
+      "sed -i 's/\\r$//' /home/ubuntu/provision.sh",
+      "sudo bash /home/ubuntu/provision.sh"
+    ]
     connection {
       type        = "ssh"
       user        = "ubuntu"
@@ -170,7 +178,11 @@ resource "aws_instance" "worker2" {
   }
 
   provisioner "remote-exec" {
-    inline = ["chmod +x /home/ubuntu/provision.sh", "/home/ubuntu/provision.sh"]
+    inline = [
+      "chmod +x /home/ubuntu/provision.sh",
+      "sed -i 's/\\r$//' /home/ubuntu/provision.sh",
+      "sudo bash /home/ubuntu/provision.sh"
+    ]
     connection {
       type        = "ssh"
       user        = "ubuntu"
@@ -197,7 +209,6 @@ resource "null_resource" "rke_setup" {
     host        = aws_instance.master.public_ip
   }
 
-  # Inject the internally generated private key into the Master
   provisioner "remote-exec" {
     inline = [
       "echo '${tls_private_key.rsa_key.private_key_pem}' > /home/ubuntu/id_rsa",
@@ -216,15 +227,12 @@ resource "null_resource" "rke_setup" {
 
   provisioner "remote-exec" {
     inline = [
-      # Install RKE Binary
+      "sed -i 's/\\r$//' /home/ubuntu/cluster.yml",
       "wget -q https://github.com/rancher/rke/releases/download/v1.4.8/rke_linux-amd64",
       "chmod +x rke_linux-amd64 && sudo mv rke_linux-amd64 /usr/local/bin/rke",
-      # Install Kubectl
       "curl -LO https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl",
       "chmod +x kubectl && sudo mv kubectl /usr/local/bin/kubectl",
-      # Deploy Cluster
       "rke up",
-      # Config setup
       "echo 'export KUBECONFIG=/home/ubuntu/kube_config_cluster.yml' >> ~/.bashrc",
       "echo \"alias k='kubectl'\" >> ~/.bashrc"
     ]
