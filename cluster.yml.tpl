@@ -23,7 +23,12 @@ nodes:
     ssh_key_path: /home/ubuntu/id_rsa
     hostname_override: worker-2
 
-# Bypass strict Docker version checks
+# Ensures the API server certificate includes the Public IP
+authentication:
+  strategy: x509
+  sans:
+    - ${master_public_ip}
+
 ignore_docker_version: true
 
 network:

@@ -70,7 +70,7 @@ resource "aws_security_group" "rke_sg" {
 }
 
 #############################################
-# MASTER
+# Instances
 #############################################
 resource "aws_instance" "master" {
   ami                         = data.aws_ami.ubuntu.id
@@ -79,10 +79,8 @@ resource "aws_instance" "master" {
   subnet_id                   = data.aws_subnets.default.ids[0]
   associate_public_ip_address = true
   vpc_security_group_ids      = [aws_security_group.rke_sg.id]
-
-  user_data = "#!/bin/bash\nhostnamectl set-hostname master"
-
-  tags = { Name = "master" }
+  user_data                   = "#!/bin/bash\nhostnamectl set-hostname master"
+  tags                        = { Name = "master" }
 
   provisioner "file" {
     source      = "provision.sh"
@@ -110,9 +108,6 @@ resource "aws_instance" "master" {
   }
 }
 
-#############################################
-# WORKER 1
-#############################################
 resource "aws_instance" "worker1" {
   ami                         = data.aws_ami.ubuntu.id
   instance_type               = var.instance_type
@@ -120,10 +115,8 @@ resource "aws_instance" "worker1" {
   subnet_id                   = data.aws_subnets.default.ids[0]
   associate_public_ip_address = true
   vpc_security_group_ids      = [aws_security_group.rke_sg.id]
-
-  user_data = "#!/bin/bash\nhostnamectl set-hostname worker-1"
-
-  tags = { Name = "worker-1" }
+  user_data                   = "#!/bin/bash\nhostnamectl set-hostname worker-1"
+  tags                        = { Name = "worker-1" }
 
   provisioner "file" {
     source      = "provision.sh"
@@ -151,9 +144,6 @@ resource "aws_instance" "worker1" {
   }
 }
 
-#############################################
-# WORKER 2
-#############################################
 resource "aws_instance" "worker2" {
   ami                         = data.aws_ami.ubuntu.id
   instance_type               = var.instance_type
@@ -161,10 +151,8 @@ resource "aws_instance" "worker2" {
   subnet_id                   = data.aws_subnets.default.ids[0]
   associate_public_ip_address = true
   vpc_security_group_ids      = [aws_security_group.rke_sg.id]
-
-  user_data = "#!/bin/bash\nhostnamectl set-hostname worker-2"
-
-  tags = { Name = "worker-2" }
+  user_data                   = "#!/bin/bash\nhostnamectl set-hostname worker-2"
+  tags                        = { Name = "worker-2" }
 
   provisioner "file" {
     source      = "provision.sh"
@@ -196,11 +184,7 @@ resource "aws_instance" "worker2" {
 # RKE Orchestration
 #############################################
 resource "null_resource" "rke_setup" {
-  depends_on = [
-    aws_instance.master,
-    aws_instance.worker1,
-    aws_instance.worker2
-  ]
+  depends_on = [aws_instance.master, aws_instance.worker1, aws_instance.worker2]
 
   connection {
     type        = "ssh"
@@ -218,9 +202,10 @@ resource "null_resource" "rke_setup" {
 
   provisioner "file" {
     content = templatefile("${path.module}/cluster.yml.tpl", {
-      master_ip  = aws_instance.master.private_ip
-      worker1_ip = aws_instance.worker1.private_ip
-      worker2_ip = aws_instance.worker2.private_ip
+      master_ip        = aws_instance.master.private_ip
+      master_public_ip = aws_instance.master.public_ip
+      worker1_ip       = aws_instance.worker1.private_ip
+      worker2_ip       = aws_instance.worker2.private_ip
     })
     destination = "/home/ubuntu/cluster.yml"
   }
@@ -236,5 +221,39 @@ resource "null_resource" "rke_setup" {
       "echo 'export KUBECONFIG=/home/ubuntu/kube_config_cluster.yml' >> ~/.bashrc",
       "echo \"alias k='kubectl'\" >> ~/.bashrc"
     ]
+  }
+
+  # Local Provisioner for global kubeconfig setup with IP-swap for external access
+  provisioner "local-exec" {
+    interpreter = substr(pathexpand("~"), 0, 1) == "/" ? ["/bin/bash", "-c"] : ["powershell", "-Command"]
+
+    command = <<EOT
+      $PRIVATE_KEY = @"
+${tls_private_key.rsa_key.private_key_pem}
+"@
+      $PUB_IP  = "${aws_instance.master.public_ip}"
+      $PRIV_IP = "${aws_instance.master.private_ip}"
+
+      if ($IsWindows -or $env:OS -like "*Windows*") {
+          $KUBE_DIR = "$HOME\.kube"
+          if (!(Test-Path $KUBE_DIR)) { New-Item -ItemType Directory -Path $KUBE_DIR }
+          Set-Content -Path "local_id_rsa" -Value $PRIVATE_KEY
+          
+          # Use braces and quotes to separate the variable from the colon in scp
+          scp -o StrictHostKeyChecking=no -i local_id_rsa "ubuntu@$${PUB_IP}:/home/ubuntu/kube_config_cluster.yml" "$KUBE_DIR\config"
+          
+          # Replace Private IP with Public IP
+          (Get-Content "$KUBE_DIR\config") -replace $PRIV_IP, $PUB_IP | Set-Content "$KUBE_DIR\config"
+          
+          Remove-Item "local_id_rsa"
+      } else {
+          mkdir -p ~/.kube
+          echo "$PRIVATE_KEY" > local_id_rsa
+          chmod 400 local_id_rsa
+          scp -o StrictHostKeyChecking=no -i local_id_rsa "ubuntu@$${PUB_IP}:/home/ubuntu/kube_config_cluster.yml" ~/.kube/config
+          sed -i "s/$PRIV_IP/$PUB_IP/g" ~/.kube/config
+          rm local_id_rsa
+      }
+    EOT
   }
 }
