@@ -104,7 +104,7 @@ resource "aws_security_group" "rke_sg" {
 }
 
 #############################################
-# Instances
+# MASTER
 #############################################
 resource "aws_instance" "master" {
   ami                         = data.aws_ami.ubuntu.id
@@ -116,6 +116,12 @@ resource "aws_instance" "master" {
   user_data                   = "#!/bin/bash\nhostnamectl set-hostname master"
   tags                        = { Name = "master" }
 
+  # Storage Increase
+  root_block_device {
+    volume_size = 20
+    volume_type = "gp3"
+  }
+
   provisioner "file" {
     source      = "provision.sh"
     destination = "/home/ubuntu/provision.sh"
@@ -142,6 +148,9 @@ resource "aws_instance" "master" {
   }
 }
 
+#############################################
+# WORKER 1
+#############################################
 resource "aws_instance" "worker1" {
   ami                         = data.aws_ami.ubuntu.id
   instance_type               = var.instance_type
@@ -152,6 +161,12 @@ resource "aws_instance" "worker1" {
   user_data                   = "#!/bin/bash\nhostnamectl set-hostname worker-1"
   tags                        = { Name = "worker-1" }
 
+  # Storage Increase
+  root_block_device {
+    volume_size = 20
+    volume_type = "gp3"
+  }
+
   provisioner "file" {
     source      = "provision.sh"
     destination = "/home/ubuntu/provision.sh"
@@ -178,6 +193,9 @@ resource "aws_instance" "worker1" {
   }
 }
 
+#############################################
+# WORKER 2
+#############################################
 resource "aws_instance" "worker2" {
   ami                         = data.aws_ami.ubuntu.id
   instance_type               = var.instance_type
@@ -187,6 +205,12 @@ resource "aws_instance" "worker2" {
   vpc_security_group_ids      = [aws_security_group.rke_sg.id]
   user_data                   = "#!/bin/bash\nhostnamectl set-hostname worker-2"
   tags                        = { Name = "worker-2" }
+
+  # Storage Increase
+  root_block_device {
+    volume_size = 20
+    volume_type = "gp3"
+  }
 
   provisioner "file" {
     source      = "provision.sh"
@@ -257,7 +281,6 @@ resource "null_resource" "rke_setup" {
     ]
   }
 
-  # Simplified Local Provisioner
   provisioner "local-exec" {
     interpreter = local.is_linux ? ["/bin/bash", "-c"] : ["powershell", "-Command"]
     command     = local.is_linux ? local.bash_script : local.powershell_script
