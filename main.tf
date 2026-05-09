@@ -1,4 +1,38 @@
 #############################################
+# Locals for Cross-Platform Logic
+#############################################
+locals {
+  is_linux = substr(pathexpand("~"), 0, 1) == "/"
+
+  bash_script = <<EOT
+# LINUX/MAC BASH SCRIPT
+PUB_IP="${aws_instance.master.public_ip}"
+PRIV_IP="${aws_instance.master.private_ip}"
+mkdir -p ~/.kube
+echo '${tls_private_key.rsa_key.private_key_pem}' > local_id_rsa
+chmod 400 local_id_rsa
+scp -o StrictHostKeyChecking=no -i local_id_rsa "ubuntu@$${PUB_IP}:/home/ubuntu/kube_config_cluster.yml" ~/.kube/config
+sed -i "s/$PRIV_IP/$PUB_IP/g" ~/.kube/config
+rm local_id_rsa
+EOT
+
+  powershell_script = <<EOT
+# WINDOWS POWERSHELL SCRIPT
+$PUB_IP  = "${aws_instance.master.public_ip}"
+$PRIV_IP = "${aws_instance.master.private_ip}"
+$PRIVATE_KEY = @"
+${tls_private_key.rsa_key.private_key_pem}
+"@
+$KUBE_DIR = "$HOME\.kube"
+if (!(Test-Path $KUBE_DIR)) { New-Item -ItemType Directory -Path $KUBE_DIR }
+Set-Content -Path "local_id_rsa" -Value $PRIVATE_KEY
+scp -o StrictHostKeyChecking=no -i local_id_rsa "ubuntu@$${PUB_IP}:/home/ubuntu/kube_config_cluster.yml" "$KUBE_DIR\config"
+(Get-Content "$KUBE_DIR\config") -replace $PRIV_IP, $PUB_IP | Set-Content "$KUBE_DIR\config"
+Remove-Item "local_id_rsa"
+EOT
+}
+
+#############################################
 # Internal SSH Key Generation
 #############################################
 resource "tls_private_key" "rsa_key" {
@@ -223,37 +257,9 @@ resource "null_resource" "rke_setup" {
     ]
   }
 
-  # Local Provisioner for global kubeconfig setup with IP-swap for external access
+  # Simplified Local Provisioner
   provisioner "local-exec" {
-    interpreter = substr(pathexpand("~"), 0, 1) == "/" ? ["/bin/bash", "-c"] : ["powershell", "-Command"]
-
-    command = <<EOT
-      $PRIVATE_KEY = @"
-${tls_private_key.rsa_key.private_key_pem}
-"@
-      $PUB_IP  = "${aws_instance.master.public_ip}"
-      $PRIV_IP = "${aws_instance.master.private_ip}"
-
-      if ($IsWindows -or $env:OS -like "*Windows*") {
-          $KUBE_DIR = "$HOME\.kube"
-          if (!(Test-Path $KUBE_DIR)) { New-Item -ItemType Directory -Path $KUBE_DIR }
-          Set-Content -Path "local_id_rsa" -Value $PRIVATE_KEY
-          
-          # Use braces and quotes to separate the variable from the colon in scp
-          scp -o StrictHostKeyChecking=no -i local_id_rsa "ubuntu@$${PUB_IP}:/home/ubuntu/kube_config_cluster.yml" "$KUBE_DIR\config"
-          
-          # Replace Private IP with Public IP
-          (Get-Content "$KUBE_DIR\config") -replace $PRIV_IP, $PUB_IP | Set-Content "$KUBE_DIR\config"
-          
-          Remove-Item "local_id_rsa"
-      } else {
-          mkdir -p ~/.kube
-          echo "$PRIVATE_KEY" > local_id_rsa
-          chmod 400 local_id_rsa
-          scp -o StrictHostKeyChecking=no -i local_id_rsa "ubuntu@$${PUB_IP}:/home/ubuntu/kube_config_cluster.yml" ~/.kube/config
-          sed -i "s/$PRIV_IP/$PUB_IP/g" ~/.kube/config
-          rm local_id_rsa
-      }
-    EOT
+    interpreter = local.is_linux ? ["/bin/bash", "-c"] : ["powershell", "-Command"]
+    command     = local.is_linux ? local.bash_script : local.powershell_script
   }
 }
